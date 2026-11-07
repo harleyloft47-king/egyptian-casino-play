@@ -3440,7 +3440,7 @@ const Craps = (() => {
       el.style.width = el.style.height = size + "px";
       el.style.transform = `translate(${d.x * s - size / 2}px, ${(d.y - d.z * .8) * s - size * .78}px)`;
       el.style.zIndex = 3 + Math.round(d.y / 10);
-      el.firstChild.style.transform = `rotateX(${TILT}deg) rotateY(${d.yaw}deg) rotateX(${d.rx}deg) rotateZ(${d.rz}deg)`;
+      el.firstChild.style.transform = `rotateX(${TILT}deg) rotateY(${d.yaw + (d.yawOff || 0)}deg) rotateX(${d.rx}deg) rotateZ(${d.rz}deg)${d.corr || ""}`;
       const lift = Math.min(1, d.z / 260);
       sh.style.width = (size * 1.25 * (1 - lift * .4)) + "px"; sh.style.height = (size * .55 * (1 - lift * .4)) + "px";
       sh.style.transform = `translate(${d.x * s - size * .62 * (1 - lift * .4)}px, ${d.y * s - size * .18}px)`;
@@ -3450,67 +3450,81 @@ const Craps = (() => {
   const near = (a, target) => target + Math.round((a - target) / 360) * 360;
   function physicsRoll(result) {
     return new Promise(resolve => {
-      if (reduced) { ds.forEach((d, i) => { d.x = 560 + i * 110; d.y = 600; d.z = 0; [d.rx, d.rz] = UP[result[i]]; }); renderDice(); return resolve(); }
-      // throw from the rail toward the back wall, like a shooter
-      ds.forEach((d, i) => {
-        d.vx = -260 - Math.random() * 360 + i * 90; d.vy = -(1250 + Math.random() * 420); d.vz = 520 + Math.random() * 260;
-        d.wx = (900 + Math.random() * 700) * (Math.random() < .5 ? -1 : 1); d.wz = (700 + Math.random() * 700) * (Math.random() < .5 ? -1 : 1); d.wy = (Math.random() - .5) * 500;
-        d.z = 18;
-      });
-      let last = performance.now(), t = 0, settling = null, quiet = 0;
-      const hit = (v) => Sound.hit(Math.min(1, v));
-      function step(dt) {
-        ds.forEach(d => {
-          d.vz -= 2700 * dt; d.z += d.vz * dt;
+      if (reduced) { ds.forEach((d, i) => { d.x = 560 + i * 110; d.y = 600; d.z = 0; [d.rx, d.rz] = UP[result[i]]; d.corr = ""; d.yawOff = 0; }); renderDice(); return resolve(); }
+      // 1. Simulate the whole throw first, so we know exactly how each die comes to rest.
+      const sim = ds.map((d, i) => ({ x: d.x, y: d.y, z: Math.max(18, d.z), rx: d.rx, rz: d.rz, yaw: d.yaw,
+        vx: -260 - Math.random() * 360 + i * 90, vy: -(1250 + Math.random() * 420), vz: 520 + Math.random() * 260,
+        wx: (900 + Math.random() * 700) * (Math.random() < .5 ? -1 : 1), wz: (700 + Math.random() * 700) * (Math.random() < .5 ? -1 : 1), wy: (Math.random() - .5) * 500 }));
+      const frames = [], hits = [], H = 1 / 240;
+      let t = 0, quiet = 0;
+      function step() {
+        sim.forEach(d => {
+          d.vz -= 2700 * H; d.z += d.vz * H;
           if (d.z <= 0) {
             d.z = 0;
-            if (d.vz < -140) { hit(-d.vz / 900); d.vz = -d.vz * .42; d.vx *= .86; d.vy *= .86; d.wx *= .7; d.wz *= .7; }
+            if (d.vz < -140) { hits.push([t, -d.vz / 900]); d.vz = -d.vz * .42; d.vx *= .86; d.vy *= .86; d.wx *= .7; d.wz *= .7; }
             else d.vz = 0;
           }
           const ground = d.z === 0 && d.vz === 0;
-          const k = Math.max(0, 1 - (ground ? 2.3 : .08) * dt);
+          const k = Math.max(0, 1 - (ground ? 2.6 : .08) * H);
           d.vx *= k; d.vy *= k;
-          if (ground) { const sp = Math.hypot(d.vx, d.vy); d.wx = -d.vy * .85; d.wz = d.vx * .85; d.wy *= k; if (sp < 30) { d.vx = d.vy = 0; } }
-          d.x += d.vx * dt; d.y += d.vy * dt;
-          d.rx += d.wx * dt; d.rz += d.wz * dt; d.yaw += d.wy * dt;
-          // table walls (the back wall gives a big bounce, like the spiked backboard)
-          if (d.y < FELT.y0) { d.y = FELT.y0; if (d.vy < 0) { hit(-d.vy / 1500); d.vy = -d.vy * .62; d.vx += (Math.random() - .5) * 260; d.wy += (Math.random() - .5) * 900; d.vz += 120; } }
-          if (d.y > FELT.y1 && d.vy > 0) { d.y = FELT.y1; d.vy = -d.vy * .4; hit(.25); }
-          if (d.x < FELT.x0) { d.x = FELT.x0; d.vx = Math.abs(d.vx) * .55; hit(.3); }
-          if (d.x > FELT.x1) { d.x = FELT.x1; d.vx = -Math.abs(d.vx) * .55; hit(.3); }
+          if (ground) {
+            // rolling on the felt: spin follows the speed, so the tumbling slows down together with the die
+            d.wx += (-d.vy * .85 - d.wx) * .08; d.wz += (d.vx * .85 - d.wz) * .08; d.wy *= k;
+            if (Math.hypot(d.vx, d.vy) < 18) { d.vx = d.vy = 0; d.wx *= .9; d.wz *= .9; }
+          }
+          d.x += d.vx * H; d.y += d.vy * H;
+          d.rx += d.wx * H; d.rz += d.wz * H; d.yaw += d.wy * H;
+          if (d.y < FELT.y0) { d.y = FELT.y0; if (d.vy < 0) { hits.push([t, -d.vy / 1500]); d.vy = -d.vy * .62; d.vx += (Math.random() - .5) * 260; d.wy += (Math.random() - .5) * 900; d.vz += 120; } }
+          if (d.y > FELT.y1 && d.vy > 0) { d.y = FELT.y1; d.vy = -d.vy * .4; hits.push([t, .25]); }
+          if (d.x < FELT.x0) { d.x = FELT.x0; d.vx = Math.abs(d.vx) * .55; hits.push([t, .3]); }
+          if (d.x > FELT.x1) { d.x = FELT.x1; d.vx = -Math.abs(d.vx) * .55; hits.push([t, .3]); }
         });
-        // the two dice knock into each other
-        const [a, b] = ds, dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy), min = DS * .92;
+        const [a, b] = sim, dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy), min = DS * .92;
         if (dist < min && dist > 0 && Math.abs(a.z - b.z) < DS) {
           const nx = dx / dist, ny = dy / dist, push = (min - dist) / 2;
           a.x -= nx * push; a.y -= ny * push; b.x += nx * push; b.y += ny * push;
           const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
-          if (rel > 0) { a.vx -= rel * nx * .9; a.vy -= rel * ny * .9; b.vx += rel * nx * .9; b.vy += rel * ny * .9; a.wy += 300; b.wy -= 300; hit(rel / 900); }
+          if (rel > 0) { a.vx -= rel * nx * .9; a.vy -= rel * ny * .9; b.vx += rel * nx * .9; b.vy += rel * ny * .9; a.wy += 300; b.wy -= 300; hits.push([t, rel / 900]); }
         }
+        t += H;
       }
-      function frame(now) {
-        let dt = Math.min(.05, (now - last) / 1000); last = now; t += dt;
-        if (!settling) {
-          while (dt > 0) { const h = Math.min(dt, 1 / 240); step(h); dt -= h; }
-          const still = ds.every(d => d.z === 0 && d.vz === 0 && Math.hypot(d.vx, d.vy) < 60);
-          quiet = still ? quiet + 1 : 0;
-          if (quiet > 3 || t > 3.2) {
-            settling = { t0: now, from: ds.map(d => [d.rx, d.rz, d.x, d.y, d.yaw]), to: ds.map((d, i) => [near(d.rx, UP[result[i]][0]), near(d.rz, UP[result[i]][1]), Math.round((d.yaw - 45) / 90) * 90 + 45 + (Math.random() - .5) * 30]) };
-            ds.forEach(d => { d.vx = d.vy = d.vz = d.z = 0; });
-          }
-        } else {
-          const p = Math.min(1, (now - settling.t0) / 380), e = 1 - Math.pow(1 - p, 3);
-          ds.forEach((d, i) => {
-            const [rx0, rz0, x0, y0, yw0] = settling.from[i], [rx1, rz1, yw1] = settling.to[i];
-            d.rx = rx0 + (rx1 - rx0) * e; d.rz = rz0 + (rz1 - rz0) * e; d.yaw = yw0 + (yw1 - yw0) * e;
-            d.z = Math.sin(p * Math.PI) * 14;                      // the last little tip-over
-            d.x = x0 + Math.sin(p * Math.PI) * 4; d.y = y0;
-          });
-          if (p >= 1) { ds.forEach((d, i) => { d.rx = settling.to[i][0]; d.rz = settling.to[i][1]; d.z = 0; }); renderDice(); return resolve(); }
-        }
-        renderDice(); requestAnimationFrame(frame);
+      let n = 0;
+      while (t < 4) {
+        step(); n++;
+        if (n % 4 === 0) frames.push(sim.map(d => [d.x, d.y, d.z, d.rx, d.rz, d.yaw]));
+        const still = sim.every(d => d.z === 0 && d.vz === 0 && d.vx === 0 && d.vy === 0 && Math.abs(d.wx) + Math.abs(d.wz) < 4);
+        quiet = still ? quiet + 1 : 0;
+        if (quiet > 24) break;
       }
-      requestAnimationFrame(frame);
+      // 2. Work out the rotation that turns wherever each die naturally stops into the rolled number,
+      //    and fold it into the die from the moment it leaves the hand. The die then simply rolls to a stop
+      //    showing the right face, with no correction at the end.
+      const end = frames[frames.length - 1];
+      ds.forEach((d, i) => {
+        const [, , , rxF, rzF, yawF] = end[i], [ux, uz] = UP[result[i]];
+        d.corr = ` rotateZ(${-rzF}deg) rotateX(${-rxF}deg) rotateX(${ux}deg) rotateZ(${uz}deg)`;
+        const want = Math.round((yawF - 45) / 90) * 90 + 45 + (Math.random() - .5) * 30;
+        d.yawOff = want - yawF;
+      });
+      // 3. Play it back in real time.
+      const t0 = performance.now(), fps = 60;
+      let hitIdx = 0;
+      (function play(now) {
+        const el = (now - t0) / 1000;
+        while (hitIdx < hits.length && hits[hitIdx][0] <= el) { Sound.hit(Math.min(1, hits[hitIdx][1])); hitIdx++; }
+        const f = Math.min(frames.length - 1, Math.floor(el * fps)), g = Math.min(frames.length - 1, f + 1), u = el * fps - Math.floor(el * fps);
+        ds.forEach((d, i) => {
+          const A = frames[f][i], B = frames[g][i];
+          d.x = A[0] + (B[0] - A[0]) * u; d.y = A[1] + (B[1] - A[1]) * u; d.z = A[2] + (B[2] - A[2]) * u;
+          d.rx = A[3] + (B[3] - A[3]) * u; d.rz = A[4] + (B[4] - A[4]) * u; d.yaw = A[5] + (B[5] - A[5]) * u;
+        });
+        renderDice();
+        if (f < frames.length - 1) return requestAnimationFrame(play);
+        // tidy the numbers up: same orientation, written plainly
+        ds.forEach((d, i) => { [d.rx, d.rz] = UP[result[i]]; d.yaw = d.yaw + d.yawOff; d.yawOff = 0; d.corr = ""; d.z = 0; });
+        renderDice(); resolve();
+      })(t0);
     });
   }
   function shake() {

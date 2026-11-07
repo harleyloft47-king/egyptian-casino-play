@@ -1,5 +1,7 @@
 # Egyptian Casino
 
+<img src="icon-192.png" width="96" alt="Egyptian Casino icon">
+
 Egyptian Bingo, Pharaoh's Fortune slots, Texas Hold'em, Cleopatra's Roulette and Blackjack, all in one page.
 
 **Play:** https://harleyloft47-king.github.io/egyptian-casino-play/

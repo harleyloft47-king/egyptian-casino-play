@@ -2052,18 +2052,20 @@ const Slots = (() => {
     }
     clearWins(); spinning = true; lastWin = 0; Purse.add(-total()); paint();
     const next = Array.from({ length: 5 }, () => [rnd(), rnd(), rnd()]);
-    const dur = c => reduced ? 1 : 650 + c * 230;
+    const dur = c => reduced ? 1 : 1700 + c * 450;          // reels stop one by one: 1.7s, 2.15s … 3.5s
     const done = [];
     for (let c = 0; c < 5; c++) {
-      const filler = Array.from({ length: SPIN_TILES }, rnd);
+      const nFill = reduced ? 3 : Math.round(dur(c) / 1000 * 11);   // about 11 symbols a second, steady speed
+      const filler = Array.from({ length: nFill }, rnd);
       const s = strips[c];
       setStrip(c, [...next[c], ...filler, ...grid[c]].slice(0, 3), [...filler, ...grid[c]]);
-      const n = 3 + SPIN_TILES + 3;
+      const n = 3 + nFill + 3;
       const from = -((n - 3) / n * 100);
       s.style.transition = "none"; s.style.transform = `translateY(${from}%)`; s.classList.add("blur");
       void s.offsetWidth;
-      s.style.transition = `transform ${dur(c)}ms cubic-bezier(.2,.65,.25,1.04)`;
+      s.style.transition = `transform ${dur(c)}ms cubic-bezier(.32,.12,.22,1.03)`;
       s.style.transform = "translateY(0)";
+      setTimeout(() => s.classList.remove("blur"), dur(c) * .62);   // symbols come into focus as the reel slows
       done.push(new Promise(res => setTimeout(() => {
         s.classList.remove("blur"); setStrip(c, next[c]); s.style.transition = "none"; s.style.transform = "none";
         Sound.reelStop(c); res();
@@ -2076,7 +2078,7 @@ const Slots = (() => {
     lastWin = res.sum;
     if (res.sum > 0) { Purse.add(res.sum); showWins(res); res.scatterWin ? Sound.bonus() : res.sum >= total() * 10 ? Sound.bigWin() : Sound.win(); }
     spinning = false; paint();
-    if (auto) setTimeout(() => { if (auto && !$("view-slots").hidden) spin(); }, res.sum > 0 ? 1500 : 650);
+    if (auto) setTimeout(() => { if (auto && !$("view-slots").hidden) spin(); }, res.sum > 0 ? 2600 : 1300);
   }
   function toggleAuto() { Sound.click(); if (auto) stopAuto(); else { auto = true; paint(); if (!spinning) spin(); } }
   function stopAuto() { auto = false; if ($("hAuto")) paint(); }
